@@ -1,0 +1,18 @@
+# A single key or chord. Examples: F13, Ctrl+Shift+F13, Alt+Space
+target = "F13"
+
+# Best-effort user-mode suppression of the original Volume Up event.
+suppress_volume_up = true
+
+# off, error, warn, info, debug, or trace
+log_level = "info"
+
+# Time used to correlate Raw Input with the global Volume Up keyboard event.
+correlation_window_ms = 100
+
+# Defaults observed from DJI Mic Mini receiver VID 0x2CA3 / PID 0x4011.
+# These can be overridden for a different firmware revision.
+usage_page = 0x000C
+usage = 0x0001
+button_usage = 0x00E9
+report_id = 6
