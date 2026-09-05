@@ -1,26 +1,37 @@
 # DJI Mic Mapper
 
-一个轻量的 Windows 11 后台程序，将 DJI Mic Mini 接收器产生的按钮事件映射为可配置的键盘单键或快捷键。
+[![CI](https://github.com/Yauanyyy/DJI-Mic-Mapper/actions/workflows/ci.yml/badge.svg)](https://github.com/Yauanyyy/DJI-Mic-Mapper/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 默认设备匹配
+DJI Mic Mapper 是一个轻量的 Windows 后台工具，用于将 DJI Mic Mini 接收器的按键事件映射为可配置的键盘按键或快捷键。
 
-- VID：`0x2CA3`
-- PID：`0x4011`
-- 顶层集合 Usage Page：`0x000C`（Consumer）
-- 顶层集合 Usage：`0x0001`（Consumer Control）
-- 按钮 Usage：`0x00E9`（Volume Increment）
-- Report ID：`6`
+程序运行在系统托盘中，不需要持续打开窗口。它通过 Windows Raw Input 识别 DJI 接收器，并可选地处理该设备同时产生的 `Volume Up` 输入。
 
-这些默认值来自本机实际连接设备的 Windows HID API 枚举结果。Usage 和 Report ID 可在 `config.toml` 中覆盖，以适配其他固件版本。
+## 功能
 
-## 使用
+- 将 DJI Mic Mini 按键映射为单键或组合键。
+- 支持 F1–F24、字母、数字、方向键、修饰键、标点键和常用媒体键。
+- 支持 `off`、`best_effort` 和 `block_all` 三种 Volume Up 处理模式。
+- 支持托盘状态查看和配置热重载。
+- 提供只观察的诊断模式，用于记录 Raw Input 与 Volume Up 的事件顺序。
+- 不依赖常驻运行时或大型框架。
 
-1. 将 `dji-mic-mapper.exe` 与 `config.toml` 放在同一目录。
-2. 启动程序并接受 UAC 管理员权限提示。
-3. 程序驻留系统托盘。右键图标可以查看状态、重新加载配置或退出。
-4. 修改配置后选择 **Reload config**，不需要重启程序。
+## 下载与运行
 
-配置示例：
+打开 GitHub 的 [Releases](https://github.com/Yauanyyy/DJI-Mic-Mapper/releases) 页面，选择对应版本：
+
+- `DJI-Mic-Mapper-<version>-windows-x64-setup.exe`：推荐。使用安装向导安装，并创建开始菜单快捷方式。
+- `DJI-Mic-Mapper-<version>-windows-x64-portable.zip`：便携版。解压后直接运行，不写入系统安装目录。
+
+当前版本使用管理员权限清单，首次启动和每次启动时可能显示 UAC 提示。这是为了保证全局键盘钩子和输入注入在不同权限级别的 Windows 程序中工作。
+
+启动后程序会驻留系统托盘。右键托盘图标可以查看状态、重新加载配置或退出程序。
+
+## 配置
+
+配置文件为程序目录下的 `config.toml`。修改后可以从托盘菜单选择 **Reload config**，无需重启程序。
+
+最小配置示例：
 
 ```toml
 target = "RightAlt"
@@ -33,70 +44,151 @@ button_usage = 0x00E9
 report_id = 6
 ```
 
-支持的日志级别：`off`、`error`、`warn`、`info`、`debug`、`trace`。日志位于程序旁边的 `logs` 目录；单个文件最大 1 MiB，最多保留 5 个历史文件。
+配置项说明：
 
-目标键支持：
+| 配置项 | 说明 | 默认值 |
+| --- | --- | --- |
+| `target` | 目标按键或快捷键 | `F13` |
+| `volume_up_mode` | Volume Up 处理模式 | `best_effort` |
+| `log_level` | `off`、`error`、`warn`、`info`、`debug` 或 `trace` | `info` |
+| `correlation_window_ms` | `best_effort` 使用的关联窗口，范围为 20–500ms | `100` |
+| `usage_page` | HID 顶层集合 Usage Page | `0x000C` |
+| `usage` | HID 顶层集合 Usage | `0x0001` |
+| `button_usage` | DJI 按键 Usage | `0x00E9` |
+| `report_id` | HID Report ID；`0` 表示不预先限定 Report ID | `6` |
 
-- `F1`–`F24`
-- `A`–`Z`、`0`–`9`
-- `Ctrl`、`Alt`、`Shift`、`Win` 修饰键
-- 可单独映射 `Alt`、`LeftAlt`、`RightAlt`、`LeftShift`、`RightShift`
-- 组合键中可使用 `LAlt`、`RAlt`、`LShift`、`RShift` 等简写
-- 常见标点键：`` ` ``、`-`、`=`、`[`、`]`、`\`、`;`、`'`、`,`、`.`、`/`
-- 标点键也支持名称别名，例如 `OEM6`、`RIGHTBRACKET`、`OEM_PLUS`、`PLUS`
-- 方向键、Home、End、PageUp、PageDown、Insert、Delete 等常用键
-- 数字键盘和常用媒体键
+### 目标按键格式
 
-例如：
+可以配置单个按键：
+
+```toml
+target = "F13"
+```
+
+也可以配置组合键：
 
 ```toml
 target = "Ctrl+Alt+]"
 ```
 
-需要发送带 `Shift` 的标点时，按物理按键组合配置，例如 `Shift+OEM6` 表示 `}`，
-`Shift+OEM_PLUS` 表示 `+`。
+支持的按键包括：
+
+- `F1`–`F24`、`A`–`Z`、`0`–`9`。
+- `Ctrl`、`Alt`、`Shift`、`Win`，以及 `LeftAlt`、`RightAlt`、`LeftShift`、`RightShift`。
+- 方向键、Home、End、PageUp、PageDown、Insert、Delete。
+- 数字键盘和常用媒体键。
+- 常见标点键及别名，例如 `OEM6`、`RIGHTBRACKET`、`OEM_PLUS` 和 `PLUS`。
+
+需要发送带 Shift 的标点时，按物理按键组合配置。例如，`Shift+OEM6` 表示 `}`，`Shift+OEM_PLUS` 表示 `+`。
+
+## Volume Up 处理模式
+
+### `off`
+
+不拦截 Volume Up。DJI 按键产生的系统音量行为会保留。
+
+### `best_effort`
+
+暂时截获标准 Volume Up，并与 DJI Raw Input 事件进行时间关联：
+
+- 判断为 DJI 产生的 Volume Up 会被丢弃。
+- 无法确认来源的 Volume Up 会在关联窗口结束后重放。
+
+这是用户态方案，不能保证对所有设备和极端时序都做到设备级别的绝对屏蔽。
+
+### `block_all`
+
+屏蔽系统识别到的所有 Volume Up，包括键盘、耳机、麦克风和其他设备产生的音量增加事件。该模式不区分来源，启用时会显示警告。
+
+音量降低和静音不受影响。
 
 ## 诊断模式
+
+使用以下命令启动只观察的诊断模式：
 
 ```powershell
 .\dji-mic-mapper.exe --diagnose
 ```
 
-诊断模式不会发送映射按键，也不会屏蔽或重放 Volume Up。它会安装“只观察”的键盘钩子，同时记录 Raw Input 和 Volume Up 的微秒级到达时间，便于分析两路事件的顺序及时间差。
+诊断模式不会发送映射按键，也不会屏蔽或重放 Volume Up。它会记录 Raw Input 和 Volume Up Hook 事件，便于确认设备识别和两路事件的时序关系。
 
-日志示例：
+日志位于程序目录下的 `logs` 文件夹。需要更完整的日志时，也可以在普通模式的 `config.toml` 中设置：
 
-```text
-1788612000.123456 [+1523.410ms] [TRACE] RAW t_us=1523380 device=... report=06 E9 00
-1788612000.126104 [+1526.058ms] [DEBUG] VOLUME_HOOK t_us=1526001 edge=down ... action=observe_only
+```toml
+log_level = "trace"
 ```
 
-要获得完整诊断信息，使用 `--diagnose`，或者在普通模式中设置 `log_level = "trace"`。
+## 默认设备
 
-`nearest_raw_press_delta_us` 表示 Volume Hook 时间减去最近一次 DJI Raw 按下时间：正数表示 Hook 较晚，负数表示 Hook 较早，`none` 表示没有发现可关联的 Raw 按下事件。若日志中有 `RAW_BUTTON` 而始终没有 `VOLUME_HOOK`，说明该设备的音量行为可能没有经过低级键盘钩子。
+当前默认匹配以下 DJI Mic Mini 接收器参数：
 
-## Volume Up 屏蔽限制
+| 参数 | 默认值 |
+| --- | --- |
+| VID | `0x2CA3` |
+| PID | `0x4011` |
+| Usage Page | `0x000C` |
+| Usage | `0x0001` |
+| Button Usage | `0x00E9` |
+| Report ID | `6` |
 
-`volume_up_mode` 支持三种模式：
+Usage 和 Report ID 可以通过配置文件覆盖。VID/PID 当前固定为默认设备，避免误匹配其他 HID 设备。
 
-- `off`：不拦截 Volume Up。
-- `best_effort`：暂时截获全局 Volume Up，再与 DJI Raw Input 的按下区间进行时间关联。判断为 DJI 的事件会丢弃，无法确认来源的事件会延迟后重放。
-- `block_all`：同时注册系统级 `VK_VOLUME_UP` 热键并安装低级键盘钩子，屏蔽所有被 Windows 识别为标准 Volume Up 的输入。启动或重新加载该配置时会显示警告；如果系统热键注册失败，程序会明确报错，而不会假装已经完全屏蔽。
+## 从源码构建
 
-> **警告：** `block_all` 不区分来源。程序运行期间，键盘、耳机、麦克风以及其他设备上的所有“音量增加”按键都会失效。音量降低和静音不受影响。
+需要：
 
-Raw Input 是监听接口，不能按设备阻止 Windows 消费 HID report。因此 `best_effort` 仍是用户态折中方案：
+- Windows；当前主要在 Windows 11 上测试；
+- Rust stable toolchain；
+- 可用的 Windows C/C++ 构建环境。
 
-- 无法确认来源的事件会延迟约 `correlation_window_ms` 后重放，优先保证普通音量键可用。
-- 极端时序下，DJI 的原始 Volume Up 仍可能漏过。要做到设备级绝对可靠屏蔽，需要安装 HID 过滤驱动。
-
-## 构建
+执行：
 
 ```powershell
-cargo test
-cargo build --release
-powershell -ExecutionPolicy Bypass -File .\scripts\package.ps1
+cargo fmt --all -- --check
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --locked --release
 ```
 
-生成文件位于 `target\release\dji-mic-mapper.exe`。
-便携发布包位于 `dist`，包含管理员清单版程序、配置文件和说明文档。
+生成便携目录：
+
+```powershell
+.\scripts\package.ps1
+```
+
+生成完整发布产物（便携 ZIP + 安装程序）需要安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)，然后执行：
+
+```powershell
+.\scripts\release.ps1 -Version 0.1.0
+```
+
+发布产物会写入 `artifacts` 目录。`target`、`dist` 和 `artifacts` 都是生成目录，不应提交到 Git。
+
+## GitHub Release
+
+推送版本标签后，GitHub Actions 会自动：
+
+1. 运行格式检查、测试、Clippy 和 Release 构建。
+2. 构建便携 ZIP。
+3. 构建 Inno Setup 安装程序。
+4. 创建 GitHub Release 并上传两个文件。
+
+示例：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+普通提交和 Pull Request 会触发 CI，但不会创建 Release。
+
+## 限制
+
+- 程序目前面向 Windows，其他平台不受支持。
+- Raw Input 是监听接口，不能按设备阻止 Windows 消费 HID 报告。
+- `best_effort` 是用户态折中方案；需要设备级绝对屏蔽时必须使用 HID 过滤驱动。
+- `block_all` 会影响所有标准 Volume Up 输入，请谨慎使用。
+
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。

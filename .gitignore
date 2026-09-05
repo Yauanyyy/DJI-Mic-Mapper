@@ -1,4 +1,21 @@
 /target/
 /dist/
+/artifacts/
 /logs/
 *.log
+
+# IDE and editor files
+.idea/
+.vscode/
+.vs/
+*.user
+*.suo
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.*
+!.env.example
