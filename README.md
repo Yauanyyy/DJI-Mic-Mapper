@@ -42,8 +42,19 @@ report_id = 6
 - `Ctrl`、`Alt`、`Shift`、`Win` 修饰键
 - 可单独映射 `Alt`、`LeftAlt`、`RightAlt`、`LeftShift`、`RightShift`
 - 组合键中可使用 `LAlt`、`RAlt`、`LShift`、`RShift` 等简写
+- 常见标点键：`` ` ``、`-`、`=`、`[`、`]`、`\`、`;`、`'`、`,`、`.`、`/`
+- 标点键也支持名称别名，例如 `OEM6`、`RIGHTBRACKET`、`OEM_PLUS`、`PLUS`
 - 方向键、Home、End、PageUp、PageDown、Insert、Delete 等常用键
 - 数字键盘和常用媒体键
+
+例如：
+
+```toml
+target = "Ctrl+Alt+]"
+```
+
+需要发送带 `Shift` 的标点时，按物理按键组合配置，例如 `Shift+OEM6` 表示 `}`，
+`Shift+OEM_PLUS` 表示 `+`。
 
 ## 诊断模式
 

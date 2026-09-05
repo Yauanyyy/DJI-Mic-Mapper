@@ -59,6 +59,13 @@ fn normalize(value: &str) -> String {
 }
 
 fn parse_main_key(value: &str) -> Option<u16> {
+    // A hyphen is removed by normalize() because it is also accepted as a
+    // separator in key names (for example, "Play-Pause"), so handle the
+    // literal punctuation key before normalizing the value.
+    if value.trim() == "-" {
+        return Some(0xBD); // VK_OEM_MINUS
+    }
+
     let key = normalize(value);
     if key.len() == 1 {
         let byte = key.as_bytes()[0];
@@ -118,6 +125,20 @@ fn parse_main_key(value: &str) -> Option<u16> {
         "PREVTRACK" | "PREVIOUSTRACK" => 0xB1,
         "STOPMEDIA" | "MEDIASTOP" => 0xB2,
         "PLAYPAUSE" | "MEDIAPLAYPAUSE" => 0xB3,
+        // Common punctuation keys. The aliases use the Windows VK_OEM_*
+        // names, while the one-character forms make configurations such as
+        // Ctrl+Alt+] read naturally.
+        "OEM1" | "SEMICOLON" | ";" => 0xBA,
+        "OEMPLUS" | "EQUAL" | "EQUALS" | "PLUS" | "=" => 0xBB,
+        "OEMCOMMA" | "COMMA" | "," => 0xBC,
+        "OEMMINUS" | "MINUS" | "HYPHEN" => 0xBD,
+        "OEMPERIOD" | "PERIOD" | "DOT" | "." => 0xBE,
+        "OEM2" | "SLASH" | "FORWARDSLASH" | "/" => 0xBF,
+        "OEM3" | "BACKTICK" | "GRAVE" | "`" => 0xC0,
+        "OEM4" | "LEFTBRACKET" | "LBRACKET" | "[" => 0xDB,
+        "OEM5" | "BACKSLASH" | "\\" => 0xDC,
+        "OEM6" | "RIGHTBRACKET" | "RBRACKET" | "]" => 0xDD,
+        "OEM7" | "APOSTROPHE" | "QUOTE" | "'" => 0xDE,
         _ => return None,
     })
 }
@@ -165,5 +186,36 @@ mod tests {
     fn parses_side_specific_modifiers() {
         let chord = Chord::parse("RightAlt+LeftShift+F13").unwrap();
         assert_eq!(chord.modifiers, vec![0xA5, 0xA0]);
+    }
+
+    #[test]
+    fn parses_common_punctuation_keys() {
+        let cases = [
+            ("`", 0xC0),
+            ("-", 0xBD),
+            ("=", 0xBB),
+            ("[", 0xDB),
+            ("]", 0xDD),
+            ("\\", 0xDC),
+            (";", 0xBA),
+            ("'", 0xDE),
+            (",", 0xBC),
+            (".", 0xBE),
+            ("/", 0xBF),
+        ];
+
+        for (name, expected) in cases {
+            assert_eq!(Chord::parse(name).unwrap().key, expected, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn parses_punctuation_aliases_in_a_chord() {
+        let chord = Chord::parse("Ctrl+Alt+OEM6").unwrap();
+        assert_eq!(chord.modifiers, vec![0x11, 0x12]);
+        assert_eq!(chord.key, 0xDD);
+
+        assert_eq!(Chord::parse("Ctrl+Alt+PLUS").unwrap().key, 0xBB);
+        assert_eq!(Chord::parse("Ctrl+Alt+OEM_MINUS").unwrap().key, 0xBD);
     }
 }
