@@ -24,7 +24,8 @@ use windows_sys::Win32::{
             GetRawInputData, GetRawInputDeviceInfoW, GetRawInputDeviceList,
             KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-                MOD_NOREPEAT, RegisterHotKey, SendInput, UnregisterHotKey, VK_VOLUME_UP,
+                KEYEVENTF_SCANCODE, MOD_NOREPEAT, RegisterHotKey, SendInput, UnregisterHotKey,
+                VK_VOLUME_UP,
             },
             RAWINPUT, RAWINPUTDEVICE, RAWINPUTDEVICELIST, RAWINPUTHEADER, RID_DEVICE_INFO,
             RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIDEV_REMOVE, RIDI_DEVICEINFO,
@@ -87,6 +88,8 @@ struct PendingVolumeEvent {
     key_up: bool,
     keyboard_time_ms: u32,
     scan_code: u32,
+    hook_flags: u32,
+    extra_info: usize,
     mode: VolumeUpMode,
     observe_only: bool,
     injected: bool,
@@ -363,15 +366,15 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                 runtime.config.effective_volume_up_mode()
             });
             let observe_only = app.diagnose;
-            let should_capture = observe_only
-                || volume_mode == VolumeUpMode::BlockAll
-                || (volume_mode == VolumeUpMode::BestEffort && !is_injected);
+            let should_capture = should_capture_volume_event(volume_mode, observe_only, is_ours);
             if should_capture {
                 app.pending_volume.push_back(PendingVolumeEvent {
                     at: Instant::now(),
                     key_up: matches!(keyboard_message, WM_KEYUP | WM_SYSKEYUP),
                     keyboard_time_ms: event.time,
                     scan_code: event.scanCode,
+                    hook_flags: event.flags,
+                    extra_info: event.dwExtraInfo,
                     mode: volume_mode,
                     observe_only,
                     injected: is_injected,
@@ -380,6 +383,25 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                 if !observe_only && volume_mode != VolumeUpMode::Off {
                     return 1;
                 }
+            } else {
+                logger::log_args(
+                    Level::Info,
+                    format_args!(
+                        "VOLUME_HOOK t_us={} edge={} injected={} flags={:#X} extra_info={:#X} kbd_time_ms={} scan_code={:#X} mode={} action=pass_through reason=not_captured",
+                        event_micros(Instant::now()),
+                        if matches!(keyboard_message, WM_KEYUP | WM_SYSKEYUP) {
+                            "up"
+                        } else {
+                            "down"
+                        },
+                        is_injected,
+                        event.flags,
+                        event.dwExtraInfo,
+                        event.time,
+                        event.scanCode,
+                        volume_mode.label()
+                    ),
+                );
             }
         }
     }
@@ -1021,10 +1043,12 @@ unsafe fn flush_pending_volume(hwnd: HWND) {
         logger::log_args(
             Level::Info,
             format_args!(
-                "VOLUME_HOOK t_us={} edge={} injected={} kbd_time_ms={} scan_code={:#X} mode={} action={} nearest_raw_press_delta_us={}",
+                "VOLUME_HOOK t_us={} edge={} injected={} flags={:#X} extra_info={:#X} kbd_time_ms={} scan_code={:#X} mode={} action={} nearest_raw_press_delta_us={}",
                 event_micros(event.at),
                 if event.key_up { "up" } else { "down" },
                 event.injected,
+                event.hook_flags,
+                event.extra_info,
                 event.keyboard_time_ms,
                 event.scan_code,
                 if event.observe_only {
@@ -1048,6 +1072,12 @@ unsafe fn flush_pending_volume(hwnd: HWND) {
 struct CorrelationResult {
     matched: bool,
     nearest_press_delta_us: Option<i128>,
+}
+
+fn should_capture_volume_event(mode: VolumeUpMode, observe_only: bool, is_ours: bool) -> bool {
+    // LLKHF_INJECTED is also set on hardware/driver-translated consumer
+    // keys. Only our private marker identifies events that must be ignored.
+    !is_ours && (observe_only || mode == VolumeUpMode::BestEffort || mode == VolumeUpMode::BlockAll)
 }
 
 fn correlate_volume_event(
@@ -1092,28 +1122,101 @@ unsafe fn send_chord(chord: &Chord) {
         size_of::<INPUT>() as i32,
     );
     if sent != inputs.len() as u32 {
-        logger::log(Level::Error, &last_error("SendInput"));
+        logger::log_args(
+            Level::Error,
+            format_args!(
+                "SEND_CHORD target={} requested={} sent={} error={}",
+                chord.display,
+                inputs.len(),
+                sent,
+                last_error("SendInput")
+            ),
+        );
+    } else {
+        logger::log_args(
+            Level::Info,
+            format_args!(
+                "SEND_CHORD target={} requested={} sent={}",
+                chord.display,
+                inputs.len(),
+                sent
+            ),
+        );
     }
 }
 
 unsafe fn send_volume_event(key_up: bool) {
     let input = key_input(VK_VOLUME_UP, key_up);
-    if SendInput(1, &input, size_of::<INPUT>() as i32) != 1 {
-        logger::log(Level::Error, &last_error("SendInput(Volume Up)"));
+    let sent = SendInput(1, &input, size_of::<INPUT>() as i32);
+    if sent != 1 {
+        logger::log_args(
+            Level::Error,
+            format_args!(
+                "SEND_VOLUME edge={} requested=1 sent={} error={}",
+                if key_up { "up" } else { "down" },
+                sent,
+                last_error("SendInput(Volume Up)")
+            ),
+        );
+    } else {
+        logger::log_args(
+            Level::Info,
+            format_args!(
+                "SEND_VOLUME edge={} requested=1 sent=1",
+                if key_up { "up" } else { "down" }
+            ),
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KeyInputEncoding {
+    virtual_key: u16,
+    scan_code: u16,
+    extended: bool,
+    use_scan_code: bool,
+}
+
+fn key_input_encoding(key: u16) -> KeyInputEncoding {
+    match key {
+        // Explicit scan-code injection preserves the left/right distinction.
+        // Both Alt keys use scan code 0x38; Right Alt carries the E0 prefix.
+        0xA4 => KeyInputEncoding {
+            virtual_key: 0,
+            scan_code: 0x38,
+            extended: false,
+            use_scan_code: true,
+        },
+        0xA5 => KeyInputEncoding {
+            virtual_key: 0,
+            scan_code: 0x38,
+            extended: true,
+            use_scan_code: true,
+        },
+        _ => KeyInputEncoding {
+            virtual_key: key,
+            scan_code: 0,
+            extended: is_extended_key(key),
+            use_scan_code: false,
+        },
     }
 }
 
 fn key_input(key: u16, key_up: bool) -> INPUT {
+    let encoding = key_input_encoding(key);
     let mut flags = if key_up { KEYEVENTF_KEYUP } else { 0 };
-    if is_extended_key(key) {
+    if encoding.extended {
         flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    if encoding.use_scan_code {
+        flags |= KEYEVENTF_SCANCODE;
     }
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: key,
-                wScan: 0,
+                wVk: encoding.virtual_key,
+                wScan: encoding.scan_code,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: INJECTED_MARKER,
@@ -1123,7 +1226,10 @@ fn key_input(key: u16, key_up: bool) -> INPUT {
 }
 
 fn is_extended_key(key: u16) -> bool {
-    matches!(key, 0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x6F | 0xA5)
+    matches!(
+        key,
+        0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x6F | 0xA5 | 0xAD..=0xB7
+    )
 }
 
 unsafe fn show_tray_menu(hwnd: HWND) {
@@ -1311,5 +1417,61 @@ mod tests {
         assert!(is_extended_key(0xA5));
         assert!(!is_extended_key(0xA4));
         assert!(!is_extended_key(0xA1));
+        assert!(is_extended_key(0xAF));
+    }
+
+    #[test]
+    fn left_alt_uses_left_alt_scan_code() {
+        assert_eq!(
+            key_input_encoding(0xA4),
+            KeyInputEncoding {
+                virtual_key: 0,
+                scan_code: 0x38,
+                extended: false,
+                use_scan_code: true,
+            }
+        );
+    }
+
+    #[test]
+    fn right_alt_uses_extended_alt_scan_code() {
+        assert_eq!(
+            key_input_encoding(0xA5),
+            KeyInputEncoding {
+                virtual_key: 0,
+                scan_code: 0x38,
+                extended: true,
+                use_scan_code: true,
+            }
+        );
+    }
+
+    #[test]
+    fn best_effort_captures_external_injected_volume_events() {
+        assert!(should_capture_volume_event(
+            VolumeUpMode::BestEffort,
+            false,
+            false
+        ));
+        assert!(!should_capture_volume_event(
+            VolumeUpMode::BestEffort,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn volume_capture_modes_are_explicit() {
+        assert!(should_capture_volume_event(
+            VolumeUpMode::BlockAll,
+            false,
+            false
+        ));
+        assert!(should_capture_volume_event(VolumeUpMode::Off, true, false));
+        assert!(!should_capture_volume_event(
+            VolumeUpMode::Off,
+            false,
+            false
+        ));
     }
 }
