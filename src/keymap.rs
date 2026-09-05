@@ -18,13 +18,7 @@ impl Chord {
 
         let mut modifiers = Vec::new();
         for part in &parts[..parts.len() - 1] {
-            let code = match normalize(part).as_str() {
-                "CTRL" | "CONTROL" => 0x11,
-                "ALT" => 0x12,
-                "SHIFT" => 0x10,
-                "WIN" | "WINDOWS" | "META" => 0x5B,
-                _ => return Err(format!("unknown modifier '{part}'")),
-            };
+            let code = parse_modifier(part).ok_or_else(|| format!("unknown modifier '{part}'"))?;
             if modifiers.contains(&code) {
                 return Err(format!("duplicate modifier '{part}'"));
             }
@@ -33,9 +27,6 @@ impl Chord {
 
         let main = parts[parts.len() - 1];
         let key = parse_main_key(main).ok_or_else(|| format!("unknown target key '{main}'"))?;
-        if matches!(key, 0x10 | 0x11 | 0x12 | 0x5B | 0x5C) {
-            return Err("a modifier cannot be the main target key".to_owned());
-        }
 
         Ok(Self {
             modifiers,
@@ -43,6 +34,21 @@ impl Chord {
             display: parts.join("+"),
         })
     }
+}
+
+fn parse_modifier(value: &str) -> Option<u16> {
+    Some(match normalize(value).as_str() {
+        "CTRL" | "CONTROL" => 0x11,
+        "ALT" => 0x12,
+        "LEFTALT" | "LALT" => 0xA4,
+        "RIGHTALT" | "RALT" | "ALTGR" => 0xA5,
+        "SHIFT" => 0x10,
+        "LEFTSHIFT" | "LSHIFT" => 0xA0,
+        "RIGHTSHIFT" | "RSHIFT" => 0xA1,
+        "WIN" | "WINDOWS" | "META" | "LEFTWIN" | "LWIN" => 0x5B,
+        "RIGHTWIN" | "RWIN" => 0x5C,
+        _ => return None,
+    })
 }
 
 fn normalize(value: &str) -> String {
@@ -77,6 +83,9 @@ fn parse_main_key(value: &str) -> Option<u16> {
         "BACKSPACE" | "BACK" => 0x08,
         "TAB" => 0x09,
         "ENTER" | "RETURN" => 0x0D,
+        "SHIFT" => 0x10,
+        "CTRL" | "CONTROL" => 0x11,
+        "ALT" => 0x12,
         "ESC" | "ESCAPE" => 0x1B,
         "SPACE" => 0x20,
         "PAGEUP" | "PGUP" => 0x21,
@@ -89,6 +98,8 @@ fn parse_main_key(value: &str) -> Option<u16> {
         "DOWN" => 0x28,
         "INSERT" | "INS" => 0x2D,
         "DELETE" | "DEL" => 0x2E,
+        "LEFTWIN" | "LWIN" | "WIN" | "WINDOWS" | "META" => 0x5B,
+        "RIGHTWIN" | "RWIN" => 0x5C,
         "MULTIPLY" => 0x6A,
         "ADD" => 0x6B,
         "SUBTRACT" => 0x6D,
@@ -96,6 +107,10 @@ fn parse_main_key(value: &str) -> Option<u16> {
         "DIVIDE" => 0x6F,
         "NUMLOCK" => 0x90,
         "SCROLLLOCK" => 0x91,
+        "LEFTSHIFT" | "LSHIFT" => 0xA0,
+        "RIGHTSHIFT" | "RSHIFT" => 0xA1,
+        "LEFTALT" | "LALT" => 0xA4,
+        "RIGHTALT" | "RALT" | "ALTGR" => 0xA5,
         "VOLUMEMUTE" | "MUTE" => 0xAD,
         "VOLUMEDOWN" => 0xAE,
         "VOLUMEUP" => 0xAF,
@@ -132,5 +147,23 @@ mod tests {
     fn parses_media_key_names() {
         assert_eq!(Chord::parse("Volume_Up").unwrap().key, 0xAF);
         assert_eq!(Chord::parse("Play-Pause").unwrap().key, 0xB3);
+    }
+
+    #[test]
+    fn parses_left_and_right_alt_as_standalone_keys() {
+        assert_eq!(Chord::parse("LeftAlt").unwrap().key, 0xA4);
+        assert_eq!(Chord::parse("RightAlt").unwrap().key, 0xA5);
+    }
+
+    #[test]
+    fn parses_left_and_right_shift_as_standalone_keys() {
+        assert_eq!(Chord::parse("LeftShift").unwrap().key, 0xA0);
+        assert_eq!(Chord::parse("RightShift").unwrap().key, 0xA1);
+    }
+
+    #[test]
+    fn parses_side_specific_modifiers() {
+        let chord = Chord::parse("RightAlt+LeftShift+F13").unwrap();
+        assert_eq!(chord.modifiers, vec![0xA5, 0xA0]);
     }
 }

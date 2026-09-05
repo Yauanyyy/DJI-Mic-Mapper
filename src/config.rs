@@ -7,11 +7,32 @@ use crate::{keymap::Chord, logger::Level};
 pub const DJI_VENDOR_ID: u32 = 0x2CA3;
 pub const DJI_PRODUCT_ID: u32 = 0x4011;
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeUpMode {
+    Off,
+    BestEffort,
+    BlockAll,
+}
+
+impl VolumeUpMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::BestEffort => "best_effort",
+            Self::BlockAll => "block_all",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub target: String,
-    pub suppress_volume_up: bool,
+    pub volume_up_mode: Option<VolumeUpMode>,
+    // Backward compatibility with the first MVP config. New files should use
+    // volume_up_mode instead.
+    pub suppress_volume_up: Option<bool>,
     pub log_level: String,
     pub correlation_window_ms: u64,
     pub usage_page: u16,
@@ -24,7 +45,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             target: "F13".to_owned(),
-            suppress_volume_up: true,
+            volume_up_mode: None,
+            suppress_volume_up: None,
             log_level: "info".to_owned(),
             correlation_window_ms: 100,
             usage_page: 0x000C,
@@ -48,6 +70,11 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
+        if self.volume_up_mode.is_some() && self.suppress_volume_up.is_some() {
+            return Err(
+                "use either volume_up_mode or legacy suppress_volume_up, not both".to_owned(),
+            );
+        }
         if !(20..=500).contains(&self.correlation_window_ms) {
             return Err("correlation_window_ms must be between 20 and 500".to_owned());
         }
@@ -55,6 +82,16 @@ impl Config {
             return Err("usage_page, usage, and button_usage must be non-zero".to_owned());
         }
         Ok(())
+    }
+
+    pub fn effective_volume_up_mode(&self) -> VolumeUpMode {
+        self.volume_up_mode.unwrap_or_else(|| {
+            if self.suppress_volume_up.unwrap_or(true) {
+                VolumeUpMode::BestEffort
+            } else {
+                VolumeUpMode::Off
+            }
+        })
     }
 }
 
@@ -69,6 +106,7 @@ mod tests {
         assert_eq!(config.usage, 0x0001);
         assert_eq!(config.button_usage, 0x00E9);
         assert_eq!(config.report_id, 6);
+        assert_eq!(config.effective_volume_up_mode(), VolumeUpMode::BestEffort);
     }
 
     #[test]
@@ -78,5 +116,30 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_suppression_setting_remains_supported() {
+        let config = Config {
+            suppress_volume_up: Some(false),
+            ..Config::default()
+        };
+        assert_eq!(config.effective_volume_up_mode(), VolumeUpMode::Off);
+    }
+
+    #[test]
+    fn rejects_two_volume_mode_settings() {
+        let config = Config {
+            volume_up_mode: Some(VolumeUpMode::BlockAll),
+            suppress_volume_up: Some(true),
+            ..Config::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn parses_block_all_mode() {
+        let config: Config = toml::from_str("volume_up_mode = 'block_all'").unwrap();
+        assert_eq!(config.effective_volume_up_mode(), VolumeUpMode::BlockAll);
     }
 }

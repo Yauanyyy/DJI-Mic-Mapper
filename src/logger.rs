@@ -4,7 +4,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_LOG_SIZE: u64 = 1_048_576;
@@ -51,6 +51,7 @@ struct Logger {
     directory: PathBuf,
     level: Level,
     file: Option<File>,
+    started: Instant,
 }
 
 impl Logger {
@@ -59,6 +60,7 @@ impl Logger {
             directory,
             level,
             file: None,
+            started: Instant::now(),
         };
         logger.open_if_needed();
         logger
@@ -121,9 +123,18 @@ impl Logger {
         self.open_if_needed();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs());
+            .unwrap_or_default();
+        let elapsed = self.started.elapsed().as_micros();
         if let Some(file) = &mut self.file {
-            let _ = writeln!(file, "{timestamp} [{}] {message}", level.label());
+            let _ = writeln!(
+                file,
+                "{}.{:06} [+{}.{:03}ms] [{}] {message}",
+                timestamp.as_secs(),
+                timestamp.subsec_micros(),
+                elapsed / 1_000,
+                elapsed % 1_000,
+                level.label()
+            );
             let _ = file.flush();
         }
     }
@@ -161,6 +172,21 @@ pub fn log(level: Level, message: &str) {
 
 pub fn log_args(level: Level, arguments: fmt::Arguments<'_>) {
     log(level, &arguments.to_string());
+}
+
+pub fn enabled(level: Level) -> bool {
+    LOGGER
+        .get()
+        .and_then(|logger| logger.lock().ok())
+        .is_some_and(|logger| logger.level != Level::Off && level <= logger.level)
+}
+
+pub fn instant_micros(instant: Instant) -> Option<u128> {
+    LOGGER
+        .get()
+        .and_then(|logger| logger.lock().ok())
+        .and_then(|logger| instant.checked_duration_since(logger.started))
+        .map(|duration| duration.as_micros())
 }
 
 #[cfg(test)]

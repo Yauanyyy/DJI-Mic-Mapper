@@ -1,13 +1,15 @@
-# A single key or chord. Examples: F13, Ctrl+Shift+F13, Alt+Space
-target = "F13"
+# A single key or chord. Examples: F13, RightAlt, RightAlt+F13
+target = "RightAlt"
 
-# Best-effort user-mode suppression of the original Volume Up event.
-suppress_volume_up = true
+# off: do not intercept Volume Up
+# best_effort: correlate Volume Up with DJI Raw Input and replay unrelated input
+# block_all: WARNING - block every Volume Up input from every device
+volume_up_mode = "best_effort"
 
 # off, error, warn, info, debug, or trace
 log_level = "info"
 
-# Time used to correlate Raw Input with the global Volume Up keyboard event.
+# Used only by best_effort mode.
 correlation_window_ms = 100
 
 # Defaults observed from DJI Mic Mini receiver VID 0x2CA3 / PID 0x4011.

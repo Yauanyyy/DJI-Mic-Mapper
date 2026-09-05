@@ -24,7 +24,7 @@ use windows_sys::Win32::{
             GetRawInputData, GetRawInputDeviceInfoW, GetRawInputDeviceList,
             KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-                SendInput, VK_VOLUME_UP,
+                MOD_NOREPEAT, RegisterHotKey, SendInput, UnregisterHotKey, VK_VOLUME_UP,
             },
             RAWINPUT, RAWINPUTDEVICE, RAWINPUTDEVICELIST, RAWINPUTHEADER, RID_DEVICE_INFO,
             RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIDEV_REMOVE, RIDI_DEVICEINFO,
@@ -43,14 +43,14 @@ use windows_sys::Win32::{
             MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
             SetForegroundWindow, SetTimer, SetWindowsHookExW, TPM_RIGHTBUTTON, TrackPopupMenu,
             TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_COMMAND, WM_DESTROY,
-            WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
-            WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
+            WM_HOTKEY, WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
+            WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
         },
     },
 };
 
 use crate::{
-    config::{Config, DJI_PRODUCT_ID, DJI_VENDOR_ID},
+    config::{Config, DJI_PRODUCT_ID, DJI_VENDOR_ID, VolumeUpMode},
     keymap::Chord,
     logger::{self, Level},
 };
@@ -66,6 +66,7 @@ const MENU_STATUS: usize = 1000;
 const MENU_RELOAD: usize = 1001;
 const MENU_EXIT: usize = 1002;
 const TRAY_ICON_ID: u32 = 1;
+const BLOCK_VOLUME_HOTKEY_ID: i32 = 1;
 const INJECTED_MARKER: usize = 0x444A_494D;
 
 #[derive(Clone)]
@@ -84,6 +85,11 @@ struct DeviceState {
 struct PendingVolumeEvent {
     at: Instant,
     key_up: bool,
+    keyboard_time_ms: u32,
+    scan_code: u32,
+    mode: VolumeUpMode,
+    observe_only: bool,
+    injected: bool,
 }
 
 struct PressInterval {
@@ -99,6 +105,7 @@ struct AppState {
     diagnose: bool,
     registered_usage: Option<(u16, u16)>,
     hook: isize,
+    block_hotkey_registered: bool,
     devices: HashMap<usize, DeviceState>,
     active_presses: HashMap<usize, Instant>,
     completed_presses: VecDeque<PressInterval>,
@@ -218,6 +225,7 @@ pub fn run() -> Result<(), String> {
         diagnose,
         registered_usage: None,
         hook: 0,
+        block_hotkey_registered: false,
         devices: HashMap::new(),
         active_presses: HashMap::new(),
         completed_presses: VecDeque::new(),
@@ -312,6 +320,16 @@ unsafe extern "system" fn window_proc(
             reload_configuration(hwnd);
             0
         }
+        WM_HOTKEY if wparam as i32 == BLOCK_VOLUME_HOTKEY_ID => {
+            logger::log_args(
+                Level::Info,
+                format_args!(
+                    "VOLUME_HOTKEY t_us={} mode=block_all action=blocked",
+                    event_micros(Instant::now())
+                ),
+            );
+            0
+        }
         WM_TIMER if wparam == TIMER_FLUSH_VOLUME => {
             flush_pending_volume(hwnd);
             0
@@ -333,25 +351,35 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             keyboard_message,
             WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP
         );
-        let is_injected = event.flags & LLKHF_INJECTED != 0 || event.dwExtraInfo == INJECTED_MARKER;
+        let is_ours = event.dwExtraInfo == INJECTED_MARKER;
+        let is_injected = event.flags & LLKHF_INJECTED != 0;
         if is_key_event
             && event.vkCode as u16 == VK_VOLUME_UP
-            && !is_injected
+            && !is_ours
             && let Some(app) = APP.get()
             && let Ok(mut app) = app.lock()
         {
-            let should_suppress = app
-                .runtime
-                .as_ref()
-                .is_some_and(|runtime| runtime.config.suppress_volume_up)
-                && !app.diagnose;
-            if should_suppress {
+            let volume_mode = app.runtime.as_ref().map_or(VolumeUpMode::Off, |runtime| {
+                runtime.config.effective_volume_up_mode()
+            });
+            let observe_only = app.diagnose;
+            let should_capture = observe_only
+                || volume_mode == VolumeUpMode::BlockAll
+                || (volume_mode == VolumeUpMode::BestEffort && !is_injected);
+            if should_capture {
                 app.pending_volume.push_back(PendingVolumeEvent {
                     at: Instant::now(),
                     key_up: matches!(keyboard_message, WM_KEYUP | WM_SYSKEYUP),
+                    keyboard_time_ms: event.time,
+                    scan_code: event.scanCode,
+                    mode: volume_mode,
+                    observe_only,
+                    injected: is_injected,
                 });
                 SetTimer(app.hwnd as HWND, TIMER_FLUSH_VOLUME, 10, None);
-                return 1;
+                if !observe_only && volume_mode != VolumeUpMode::Off {
+                    return 1;
+                }
             }
         }
     }
@@ -360,6 +388,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
 
 unsafe fn activate_runtime(hwnd: HWND) {
     let mut error = None;
+    let mut block_all_warning = false;
     if let Some(app_mutex) = APP.get()
         && let Ok(mut app) = app_mutex.lock()
     {
@@ -397,14 +426,46 @@ unsafe fn activate_runtime(hwnd: HWND) {
             );
         }
 
-        if error.is_none() && runtime.config.suppress_volume_up && !app.diagnose {
+        let volume_mode = runtime.config.effective_volume_up_mode();
+        logger::log_args(
+            Level::Info,
+            format_args!("Volume Up mode: {}", volume_mode.label()),
+        );
+        if error.is_none() && !app.diagnose && volume_mode == VolumeUpMode::BlockAll {
+            if RegisterHotKey(
+                hwnd,
+                BLOCK_VOLUME_HOTKEY_ID,
+                MOD_NOREPEAT,
+                VK_VOLUME_UP as u32,
+            ) == 0
+            {
+                error = Some(last_error("RegisterHotKey(VK_VOLUME_UP)"));
+            } else {
+                app.block_hotkey_registered = true;
+                logger::log(
+                    Level::Warn,
+                    "system-wide Volume Up hotkey reservation enabled",
+                );
+            }
+        }
+        if error.is_none() && (app.diagnose || volume_mode != VolumeUpMode::Off) {
             let module = GetModuleHandleW(null());
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0);
             if hook.is_null() {
                 error = Some(last_error("SetWindowsHookExW"));
             } else {
                 app.hook = hook as isize;
-                logger::log(Level::Info, "best-effort Volume Up suppression enabled");
+                if app.diagnose {
+                    logger::log(
+                        Level::Info,
+                        "observe-only Volume Up hook enabled for diagnostics",
+                    );
+                } else if volume_mode == VolumeUpMode::BlockAll {
+                    logger::log(Level::Warn, "all Volume Up inputs will be blocked");
+                    block_all_warning = true;
+                } else {
+                    logger::log(Level::Info, "best-effort Volume Up suppression enabled");
+                }
             }
         }
     }
@@ -420,6 +481,10 @@ unsafe fn activate_runtime(hwnd: HWND) {
         show_warning(&format!(
             "DJI Mic Mapper could not activate mapping.\n\n{error}"
         ));
+    } else if block_all_warning {
+        show_warning(
+            "WARNING: volume_up_mode is set to block_all.\n\nEvery Volume Up input from every keyboard, headset, microphone, or other device will be blocked while DJI Mic Mapper is running.",
+        );
     }
     add_or_update_tray_icon(hwnd, NIM_MODIFY);
 }
@@ -428,6 +493,10 @@ unsafe fn deactivate_runtime() {
     if let Some(app_mutex) = APP.get()
         && let Ok(mut app) = app_mutex.lock()
     {
+        if app.block_hotkey_registered {
+            UnregisterHotKey(app.hwnd as HWND, BLOCK_VOLUME_HOTKEY_ID);
+            app.block_hotkey_registered = false;
+        }
         if app.hook != 0 {
             UnhookWindowsHookEx(app.hook as HHOOK);
             app.hook = 0;
@@ -443,7 +512,9 @@ unsafe fn deactivate_runtime() {
         }
         let pending: Vec<_> = app.pending_volume.drain(..).collect();
         for event in pending {
-            send_volume_event(event.key_up);
+            if event.mode == VolumeUpMode::BestEffort && !event.observe_only {
+                send_volume_event(event.key_up);
+            }
         }
         app.devices.clear();
         app.active_presses.clear();
@@ -527,12 +598,8 @@ unsafe fn handle_raw_input(raw_handle: *mut c_void) {
         return;
     }
 
-    let (runtime, diagnose, known_match) = match APP.get().and_then(|app| app.lock().ok()) {
-        Some(app) => (
-            app.runtime.clone(),
-            app.diagnose,
-            app.devices.contains_key(&device_key),
-        ),
+    let (runtime, known_match) = match APP.get().and_then(|app| app.lock().ok()) {
+        Some(app) => (app.runtime.clone(), app.devices.contains_key(&device_key)),
         None => return,
     };
     let Some(runtime) = runtime else {
@@ -569,20 +636,30 @@ unsafe fn handle_raw_input(raw_handle: *mut c_void) {
 
     let data = hid.bRawData.as_ptr();
     for index in 0..report_count {
+        let received_at = Instant::now();
         let report = std::slice::from_raw_parts(data.add(index * report_size), report_size);
-        if diagnose {
+        if logger::enabled(Level::Trace) {
             logger::log_args(
                 Level::Trace,
-                format_args!("device={device_key:#X} report={}", hex_bytes(report)),
+                format_args!(
+                    "RAW t_us={} device={device_key:#X} report={}",
+                    event_micros(received_at),
+                    hex_bytes(report)
+                ),
             );
         }
         if let Some(pressed) = parsed_button_state(device_key, report, &runtime.config) {
-            process_button_state(device_key, pressed, &runtime);
+            process_button_state(device_key, pressed, received_at, &runtime);
         }
     }
 }
 
-unsafe fn process_button_state(device_key: usize, pressed: bool, runtime: &RuntimeConfig) {
+unsafe fn process_button_state(
+    device_key: usize,
+    pressed: bool,
+    received_at: Instant,
+    runtime: &RuntimeConfig,
+) {
     let mut trigger = false;
     if let Some(app_mutex) = APP.get()
         && let Ok(mut app) = app_mutex.lock()
@@ -590,23 +667,29 @@ unsafe fn process_button_state(device_key: usize, pressed: bool, runtime: &Runti
         let previous = app.devices.entry(device_key).or_default().pressed;
         if pressed && !previous {
             app.devices.get_mut(&device_key).unwrap().pressed = true;
-            app.active_presses.insert(device_key, Instant::now());
+            app.active_presses.insert(device_key, received_at);
             trigger = !app.diagnose;
             logger::log_args(
-                Level::Debug,
-                format_args!("device={device_key:#X} button down"),
+                Level::Info,
+                format_args!(
+                    "RAW_BUTTON t_us={} device={device_key:#X} edge=down",
+                    event_micros(received_at)
+                ),
             );
         } else if !pressed && previous {
             app.devices.get_mut(&device_key).unwrap().pressed = false;
             if let Some(start) = app.active_presses.remove(&device_key) {
                 app.completed_presses.push_back(PressInterval {
                     start,
-                    end: Instant::now(),
+                    end: received_at,
                 });
             }
             logger::log_args(
-                Level::Debug,
-                format_args!("device={device_key:#X} button up"),
+                Level::Info,
+                format_args!(
+                    "RAW_BUTTON t_us={} device={device_key:#X} edge=up",
+                    event_micros(received_at)
+                ),
             );
         }
     }
@@ -821,7 +904,7 @@ unsafe fn create_device_state(device: HANDLE, config: &Config) -> DeviceState {
         );
     } else {
         logger::log_args(
-            Level::Debug,
+            Level::Info,
             format_args!("HID parser capacity: {max_usages} usages"),
         );
     }
@@ -892,7 +975,7 @@ fn report_button_state(report: &[u8], config: &Config) -> Option<bool> {
 
 unsafe fn flush_pending_volume(hwnd: HWND) {
     let now = Instant::now();
-    let mut replay = Vec::new();
+    let mut decisions = Vec::new();
     let mut still_pending = false;
 
     if let Some(app_mutex) = APP.get()
@@ -913,40 +996,84 @@ unsafe fn flush_pending_volume(hwnd: HWND) {
             app.completed_presses.pop_front();
         }
 
-        while app
-            .pending_volume
-            .front()
-            .is_some_and(|event| now.duration_since(event.at) >= window)
-        {
-            let event = app.pending_volume.pop_front().unwrap();
-            let belongs_to_dji = event_matches_dji(&app, event.at, window);
-            if belongs_to_dji {
-                logger::log(Level::Debug, "suppressed correlated DJI Volume Up event");
+        let pending = std::mem::take(&mut app.pending_volume);
+        for event in pending {
+            if event.observe_only {
+                decisions.push((event, "observe_only", None));
+            } else if event.mode == VolumeUpMode::BlockAll {
+                decisions.push((event, "block_all", None));
+            } else if now.duration_since(event.at) < window {
+                app.pending_volume.push_back(event);
             } else {
-                replay.push(event.key_up);
+                let correlation = correlate_volume_event(&app, event.at, window);
+                let action = if correlation.matched {
+                    "suppress_dji"
+                } else {
+                    "replay_uncorrelated"
+                };
+                decisions.push((event, action, correlation.nearest_press_delta_us));
             }
         }
         still_pending = !app.pending_volume.is_empty();
     }
 
-    for key_up in replay {
-        logger::log(Level::Trace, "replaying uncorrelated Volume Up event");
-        send_volume_event(key_up);
+    for (event, action, nearest_delta) in decisions {
+        logger::log_args(
+            Level::Info,
+            format_args!(
+                "VOLUME_HOOK t_us={} edge={} injected={} kbd_time_ms={} scan_code={:#X} mode={} action={} nearest_raw_press_delta_us={}",
+                event_micros(event.at),
+                if event.key_up { "up" } else { "down" },
+                event.injected,
+                event.keyboard_time_ms,
+                event.scan_code,
+                if event.observe_only {
+                    "observe_only"
+                } else {
+                    event.mode.label()
+                },
+                action,
+                nearest_delta.map_or_else(|| "none".to_owned(), |delta| delta.to_string())
+            ),
+        );
+        if action == "replay_uncorrelated" {
+            send_volume_event(event.key_up);
+        }
     }
     if !still_pending {
         KillTimer(hwnd, TIMER_FLUSH_VOLUME);
     }
 }
 
-fn event_matches_dji(app: &AppState, event_time: Instant, window: Duration) -> bool {
+struct CorrelationResult {
+    matched: bool,
+    nearest_press_delta_us: Option<i128>,
+}
+
+fn correlate_volume_event(
+    app: &AppState,
+    event_time: Instant,
+    window: Duration,
+) -> CorrelationResult {
     let near_active = app.active_presses.values().any(|start| {
         event_time >= start.checked_sub(window).unwrap_or(*start) && event_time <= Instant::now()
     });
-    near_active
+    let matched = near_active
         || app.completed_presses.iter().any(|interval| {
             event_time >= interval.start.checked_sub(window).unwrap_or(interval.start)
                 && event_time <= interval.end + window
-        })
+        });
+    let nearest_press_delta_us = app
+        .active_presses
+        .values()
+        .copied()
+        .chain(app.completed_presses.iter().map(|interval| interval.start))
+        .map(|press_time| signed_micros(event_time, press_time))
+        .min_by_key(|delta| delta.unsigned_abs());
+    CorrelationResult {
+        matched,
+        nearest_press_delta_us,
+    }
 }
 
 unsafe fn send_chord(chord: &Chord) {
@@ -996,7 +1123,7 @@ fn key_input(key: u16, key_up: bool) -> INPUT {
 }
 
 fn is_extended_key(key: u16) -> bool {
-    matches!(key, 0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x6F)
+    matches!(key, 0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x6F | 0xA5)
 }
 
 unsafe fn show_tray_menu(hwnd: HWND) {
@@ -1088,9 +1215,10 @@ fn current_status() -> String {
             } else if let Some(runtime) = &app.runtime {
                 let mode = if app.diagnose { "diagnostic" } else { "active" };
                 format!(
-                    "{mode}; matching devices: {}; target: {}",
+                    "{mode}; matching devices: {}; target: {}; volume: {}",
                     app.devices.len(),
-                    runtime.chord.display
+                    runtime.chord.display,
+                    runtime.config.effective_volume_up_mode().label()
                 )
             } else {
                 "Mapping disabled".to_owned()
@@ -1144,6 +1272,18 @@ fn hex_bytes(bytes: &[u8]) -> String {
         .join(" ")
 }
 
+fn event_micros(instant: Instant) -> u128 {
+    logger::instant_micros(instant).unwrap_or(0)
+}
+
+fn signed_micros(left: Instant, right: Instant) -> i128 {
+    if left >= right {
+        left.duration_since(right).as_micros() as i128
+    } else {
+        -(right.duration_since(left).as_micros() as i128)
+    }
+}
+
 fn last_error(operation: &str) -> String {
     format!("{operation} failed: {}", std::io::Error::last_os_error())
 }
@@ -1164,5 +1304,12 @@ mod tests {
     fn other_consumer_usage_is_not_the_button() {
         let config = Config::default();
         assert_eq!(report_button_state(&[6, 0xEA, 0x00], &config), Some(false));
+    }
+
+    #[test]
+    fn right_alt_uses_the_extended_key_flag() {
+        assert!(is_extended_key(0xA5));
+        assert!(!is_extended_key(0xA4));
+        assert!(!is_extended_key(0xA1));
     }
 }

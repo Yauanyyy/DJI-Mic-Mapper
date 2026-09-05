@@ -23,8 +23,8 @@
 配置示例：
 
 ```toml
-target = "Ctrl+Shift+F13"
-suppress_volume_up = true
+target = "RightAlt"
+volume_up_mode = "best_effort"
 log_level = "info"
 correlation_window_ms = 100
 usage_page = 0x000C
@@ -40,6 +40,8 @@ report_id = 6
 - `F1`–`F24`
 - `A`–`Z`、`0`–`9`
 - `Ctrl`、`Alt`、`Shift`、`Win` 修饰键
+- 可单独映射 `Alt`、`LeftAlt`、`RightAlt`、`LeftShift`、`RightShift`
+- 组合键中可使用 `LAlt`、`RAlt`、`LShift`、`RShift` 等简写
 - 方向键、Home、End、PageUp、PageDown、Insert、Delete 等常用键
 - 数字键盘和常用媒体键
 
@@ -49,14 +51,32 @@ report_id = 6
 .\dji-mic-mapper.exe --diagnose
 ```
 
-诊断模式不会发送映射按键，也不会安装 Volume Up 钩子。匹配设备的原始 HID report 会写入 trace 日志。
+诊断模式不会发送映射按键，也不会屏蔽或重放 Volume Up。它会安装“只观察”的键盘钩子，同时记录 Raw Input 和 Volume Up 的微秒级到达时间，便于分析两路事件的顺序及时间差。
+
+日志示例：
+
+```text
+1788612000.123456 [+1523.410ms] [TRACE] RAW t_us=1523380 device=... report=06 E9 00
+1788612000.126104 [+1526.058ms] [DEBUG] VOLUME_HOOK t_us=1526001 edge=down ... action=observe_only
+```
+
+要获得完整诊断信息，使用 `--diagnose`，或者在普通模式中设置 `log_level = "trace"`。
+
+`nearest_raw_press_delta_us` 表示 Volume Hook 时间减去最近一次 DJI Raw 按下时间：正数表示 Hook 较晚，负数表示 Hook 较早，`none` 表示没有发现可关联的 Raw 按下事件。若日志中有 `RAW_BUTTON` 而始终没有 `VOLUME_HOOK`，说明该设备的音量行为可能没有经过低级键盘钩子。
 
 ## Volume Up 屏蔽限制
 
-Raw Input 是监听接口，不能按设备阻止 Windows 消费 HID report。程序采用用户态折中方案：暂时截获全局 `Volume Up`，再与 DJI Raw Input 的按下区间进行时间关联。
+`volume_up_mode` 支持三种模式：
 
-- 判断为 DJI 的事件会被丢弃。
-- 无法确认来源的事件会延迟约 `correlation_window_ms` 后重放，优先保证普通键盘和耳机的音量键可用。
+- `off`：不拦截 Volume Up。
+- `best_effort`：暂时截获全局 Volume Up，再与 DJI Raw Input 的按下区间进行时间关联。判断为 DJI 的事件会丢弃，无法确认来源的事件会延迟后重放。
+- `block_all`：同时注册系统级 `VK_VOLUME_UP` 热键并安装低级键盘钩子，屏蔽所有被 Windows 识别为标准 Volume Up 的输入。启动或重新加载该配置时会显示警告；如果系统热键注册失败，程序会明确报错，而不会假装已经完全屏蔽。
+
+> **警告：** `block_all` 不区分来源。程序运行期间，键盘、耳机、麦克风以及其他设备上的所有“音量增加”按键都会失效。音量降低和静音不受影响。
+
+Raw Input 是监听接口，不能按设备阻止 Windows 消费 HID report。因此 `best_effort` 仍是用户态折中方案：
+
+- 无法确认来源的事件会延迟约 `correlation_window_ms` 后重放，优先保证普通音量键可用。
 - 极端时序下，DJI 的原始 Volume Up 仍可能漏过。要做到设备级绝对可靠屏蔽，需要安装 HID 过滤驱动。
 
 ## 构建
