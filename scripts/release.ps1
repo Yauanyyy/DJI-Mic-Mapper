@@ -10,7 +10,7 @@ $artifactDir = Join-Path $projectRoot "artifacts"
 $portableDir = Join-Path $artifactDir "portable"
 
 if ($Version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
-    throw "Version must look like 0.1.0 or 0.1.0.1"
+    throw "Version must look like 1.2.3 or 1.2.3.4"
 }
 
 if (-not $SkipBuild) {

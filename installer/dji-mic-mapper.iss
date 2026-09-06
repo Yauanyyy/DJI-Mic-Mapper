@@ -1,6 +1,6 @@
 #define AppName "DJI Mic Mapper"
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.1.1"
 #endif
 #define AppPublisher "Yauanyyy"
 #define AppExeName "DJI Mic Mapper.exe"

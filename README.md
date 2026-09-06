@@ -25,7 +25,7 @@ DJI Mic Mapper 是一个轻量的 Windows 后台工具，用于将 DJI Mic Mini 
 
 当前版本使用管理员权限清单，首次启动和每次启动时可能显示 UAC 提示。这是为了保证全局键盘钩子和输入注入在不同权限级别的 Windows 程序中工作。
 
-启动后程序会驻留系统托盘。右键托盘图标可以查看状态、重新加载配置或退出程序。
+启动后程序会驻留系统托盘，并显示当前映射、配置文件路径和运行状态。右键托盘图标可以查看状态、重新加载配置、打开配置文件或退出程序；重载成功或失败都会显示结果。
 
 ## 配置
 
@@ -50,6 +50,7 @@ report_id = 6
 | --- | --- | --- |
 | `target` | 目标按键或快捷键 | `F13` |
 | `volume_up_mode` | Volume Up 处理模式 | `best_effort` |
+| `suppress_volume_up` | 旧版兼容配置；与 `volume_up_mode` 二选一 | 未设置 |
 | `log_level` | `off`、`error`、`warn`、`info`、`debug` 或 `trace` | `info` |
 | `correlation_window_ms` | `best_effort` 使用的关联窗口，范围为 20–500ms | `100` |
 | `usage_page` | HID 顶层集合 Usage Page | `0x000C` |
@@ -57,29 +58,33 @@ report_id = 6
 | `button_usage` | DJI 按键 Usage | `0x00E9` |
 | `report_id` | HID Report ID；`0` 表示不预先限定 Report ID | `6` |
 
-### 目标按键格式
+### 按键映射查询表
 
-可以配置单个按键：
+`target` 可以配置单个按键，也可以使用 `+` 连接修饰键组成快捷键：
 
 ```toml
 target = "F13"
 ```
 
-也可以配置组合键：
-
 ```toml
 target = "Ctrl+Alt+]"
 ```
 
-支持的按键包括：
+按键名称不区分大小写；名称中的空格、连字符和下划线会被忽略。因此 `Volume_Up`、`Volume-Up` 和 `volumeup` 等写法等价。下表列出所有支持的按键名称和别名。
 
-- `F1`–`F24`、`A`–`Z`、`0`–`9`。
-- `Ctrl`、`Alt`、`Shift`、`Win`，以及 `LeftAlt`、`RightAlt`、`LeftShift`、`RightShift`。
-- 方向键、Home、End、PageUp、PageDown、Insert、Delete。
-- 数字键盘和常用媒体键。
-- 常见标点键及别名，例如 `OEM6`、`RIGHTBRACKET`、`OEM_PLUS` 和 `PLUS`。
+| 类别 | 可用名称 | 示例或说明 |
+| --- | --- | --- |
+| 字母 | `A`–`Z` | `A`、`M`、`Z` |
+| 数字 | `0`–`9` | 主键盘数字键 |
+| 功能键 | `F1`–`F24` | `F13` |
+| 修饰键 | `Ctrl` (`Control`)、`Alt`、`Shift`、`Win` (`Windows`、`Meta`)、`LeftWin` (`LWin`)、`RightWin` (`RWin`)、`LeftAlt` (`LAlt`)、`RightAlt` (`RAlt`、`AltGr`)、`LeftShift` (`LShift`)、`RightShift` (`RShift`) | 作为组合键前缀，例如 `Ctrl+Shift+F13`；也可以单独作为目标键 |
+| 编辑与控制 | `Backspace` (`Back`)、`Tab`、`Enter` (`Return`)、`Esc` (`Escape`)、`Space` | `Ctrl+Alt+Delete` |
+| 导航 | `PageUp` (`PgUp`)、`PageDown` (`PgDn`)、`Home`、`End`、`Insert` (`Ins`)、`Delete` (`Del`)、`Left`、`Up`、`Right`、`Down` | `Shift+Home` |
+| 数字键盘 | `Numpad0`–`Numpad9`、`Multiply`、`Add`、`Subtract`、`Decimal`、`Divide`、`NumLock`、`ScrollLock` | `Numpad1`、`Add` |
+| 媒体键 | `VolumeMute` (`Mute`)、`VolumeDown`、`VolumeUp`、`NextTrack`、`PrevTrack` (`PreviousTrack`)、`StopMedia` (`MediaStop`)、`PlayPause` (`MediaPlayPause`) | `PlayPause` |
+| OEM 标点 | `OEM1` (`Semicolon`、`;`)、`OEM_PLUS` (`Equal`、`Equals`、`Plus`、`=`)、`OEMComma` (`Comma`、`,`)、`OEMMinus` (`Minus`、`Hyphen`、`-`)、`OEMPeriod` (`Period`、`Dot`、`.`)、`OEM2` (`Slash`、`ForwardSlash`、`/`)、`OEM3` (`Backtick`、`Grave`、`` ` ``)、`OEM4` (`LeftBracket`、`LBracket`、`[`)、`OEM5` (`Backslash`、`\\`)、`OEM6` (`RightBracket`、`RBracket`、`]`)、`OEM7` (`Apostrophe`、`Quote`、`'`) | 例如 `Ctrl+Alt+OEM6`；`Shift+OEM6` 表示 `}`，`Shift+OEM_PLUS` 表示 `+` |
 
-需要发送带 Shift 的标点时，按物理按键组合配置。例如，`Shift+OEM6` 表示 `}`，`Shift+OEM_PLUS` 表示 `+`。
+`+` 是组合键分隔符，因此不能直接写成 `target = "+"`；映射加号请使用 `PLUS`、`Equal` 或 `OEM_PLUS`。配置文件中使用 TOML 字符串时，反斜杠和引号仍需遵循 TOML 转义规则。
 
 ## Volume Up 处理模式
 
@@ -159,7 +164,7 @@ cargo build --locked --release
 生成完整发布产物（便携 ZIP + 安装程序）需要安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)，然后执行：
 
 ```powershell
-.\scripts\release.ps1 -Version 0.1.0
+.\scripts\release.ps1 -Version 0.1.1
 ```
 
 发布产物会写入 `artifacts` 目录。`target`、`dist` 和 `artifacts` 都是生成目录，不应提交到 Git。
@@ -176,8 +181,8 @@ cargo build --locked --release
 示例：
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 普通提交和 Pull Request 会触发 CI，但不会创建 Release。

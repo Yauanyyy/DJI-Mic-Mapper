@@ -33,7 +33,7 @@ use windows_sys::Win32::{
         },
         Shell::{
             NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-            Shell_NotifyIconW,
+            Shell_NotifyIconW, ShellExecuteW,
         },
         WindowsAndMessaging::{
             AppendMenuW, CW_USEDEFAULT, CallNextHookEx, CreatePopupMenu, CreateWindowExW,
@@ -42,10 +42,11 @@ use windows_sys::Win32::{
             KBDLLHOOKSTRUCT, KillTimer, LLKHF_INJECTED, LoadIconW, MB_ICONERROR,
             MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
             MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
-            SetForegroundWindow, SetTimer, SetWindowsHookExW, TPM_RIGHTBUTTON, TrackPopupMenu,
-            TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_COMMAND, WM_DESTROY,
-            WM_HOTKEY, WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
-            WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
+            SW_SHOWNORMAL, SetForegroundWindow, SetTimer, SetWindowsHookExW, TPM_RIGHTBUTTON,
+            TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP,
+            WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_KEYDOWN,
+            WM_KEYUP, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+            WNDCLASSW,
         },
     },
 };
@@ -65,7 +66,8 @@ const WM_RELOAD_CONFIG: u32 = WM_APP + 2;
 const TIMER_FLUSH_VOLUME: usize = 1;
 const MENU_STATUS: usize = 1000;
 const MENU_RELOAD: usize = 1001;
-const MENU_EXIT: usize = 1002;
+const MENU_OPEN_CONFIG: usize = 1002;
+const MENU_EXIT: usize = 1003;
 const TRAY_ICON_ID: u32 = 1;
 const BLOCK_VOLUME_HOTKEY_ID: i32 = 1;
 const INJECTED_MARKER: usize = 0x444A_494D;
@@ -245,6 +247,8 @@ pub fn run() -> Result<(), String> {
         show_warning(&format!(
             "Configuration error; mapping is disabled.\n\n{error}"
         ));
+    } else if !diagnose {
+        show_info(&startup_message());
     }
 
     let mut message: MSG = unsafe { zeroed() };
@@ -312,6 +316,7 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             match wparam & 0xFFFF {
                 MENU_RELOAD => reload_configuration(hwnd),
+                MENU_OPEN_CONFIG => open_config_file(hwnd),
                 MENU_EXIT => {
                     DestroyWindow(hwnd);
                 }
@@ -553,6 +558,7 @@ unsafe fn reload_configuration(hwnd: HWND) {
     deactivate_runtime();
 
     let mut error_to_show = None;
+    let mut reloaded = false;
     if let Some(app_mutex) = APP.get()
         && let Ok(mut app) = app_mutex.lock()
     {
@@ -562,6 +568,7 @@ unsafe fn reload_configuration(hwnd: HWND) {
                 logger::log(Level::Info, "configuration reloaded");
                 app.runtime = Some(RuntimeConfig { config, chord });
                 app.config_error = None;
+                reloaded = true;
             }
             Err(error) => {
                 logger::log(Level::Error, &error);
@@ -575,6 +582,12 @@ unsafe fn reload_configuration(hwnd: HWND) {
     if let Some(error) = error_to_show {
         show_warning(&format!(
             "Configuration error; mapping is disabled.\n\n{error}"
+        ));
+    } else if reloaded && current_config_error().is_none() {
+        show_info(&format!(
+            "Configuration reloaded successfully.\n\n{}\n\nConfiguration file:\n{}",
+            current_status(),
+            path.display()
         ));
     }
 }
@@ -1240,6 +1253,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let status = current_status();
     let status_wide = wide(&status);
     let reload = wide("Reload config");
+    let open_config = wide("Open config file");
     let exit = wide("Exit");
     AppendMenuW(
         menu,
@@ -1249,6 +1263,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     );
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     AppendMenuW(menu, MF_STRING, MENU_RELOAD, reload.as_ptr());
+    AppendMenuW(menu, MF_STRING, MENU_OPEN_CONFIG, open_config.as_ptr());
     AppendMenuW(menu, MF_STRING, MENU_EXIT, exit.as_ptr());
 
     let mut point = POINT { x: 0, y: 0 };
@@ -1271,6 +1286,30 @@ fn show_status_dialog() {
     }
 }
 
+unsafe fn open_config_file(hwnd: HWND) {
+    let path = match APP.get().and_then(|app| app.lock().ok()) {
+        Some(app) => app.config_path.clone(),
+        None => return,
+    };
+    let operation = wide("open");
+    let file = wide(&path.to_string_lossy());
+    let result = ShellExecuteW(
+        hwnd,
+        operation.as_ptr(),
+        file.as_ptr(),
+        null(),
+        null(),
+        SW_SHOWNORMAL,
+    );
+    if (result as usize) <= 32 {
+        show_warning(&format!(
+            "Could not open the configuration file.\n\n{}\n\nWindows error code: {}",
+            path.display(),
+            result as usize
+        ));
+    }
+}
+
 fn show_warning(message: &str) {
     let text = wide(message);
     let title = wide(WINDOW_TITLE);
@@ -1280,6 +1319,19 @@ fn show_warning(message: &str) {
             text.as_ptr(),
             title.as_ptr(),
             MB_OK | MB_ICONWARNING,
+        );
+    }
+}
+
+fn show_info(message: &str) {
+    let text = wide(message);
+    let title = wide(WINDOW_TITLE);
+    unsafe {
+        MessageBoxW(
+            raw_window(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
         );
     }
 }
@@ -1347,6 +1399,23 @@ fn current_config_error() -> Option<String> {
     APP.get()
         .and_then(|app| app.lock().ok())
         .and_then(|app| app.config_error.clone())
+}
+
+fn startup_message() -> String {
+    let config_path = current_config_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    format!(
+        "DJI Mic Mapper is running in the system tray.\n\n{}\n\nConfiguration file:\n{}",
+        current_status(),
+        config_path
+    )
+}
+
+fn current_config_path() -> Option<PathBuf> {
+    APP.get()
+        .and_then(|app| app.lock().ok())
+        .map(|app| app.config_path.clone())
 }
 
 fn raw_window() -> HWND {
