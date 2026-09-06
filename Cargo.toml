@@ -1,6 +1,6 @@
 [package]
 name = "dji-mic-mapper"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Lightweight Windows 11 DJI Mic Mini button mapper"
 license = "MIT"

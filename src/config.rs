@@ -48,7 +48,7 @@ impl Default for Config {
             volume_up_mode: None,
             suppress_volume_up: None,
             log_level: "info".to_owned(),
-            correlation_window_ms: 100,
+            correlation_window_ms: 10,
             usage_page: 0x000C,
             usage: 0x0001,
             button_usage: 0x00E9,
@@ -75,8 +75,8 @@ impl Config {
                 "use either volume_up_mode or legacy suppress_volume_up, not both".to_owned(),
             );
         }
-        if !(20..=500).contains(&self.correlation_window_ms) {
-            return Err("correlation_window_ms must be between 20 and 500".to_owned());
+        if !(5..=100).contains(&self.correlation_window_ms) {
+            return Err("correlation_window_ms must be between 5 and 100".to_owned());
         }
         if self.usage_page == 0 || self.usage == 0 || self.button_usage == 0 {
             return Err("usage_page, usage, and button_usage must be non-zero".to_owned());
@@ -110,12 +110,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unreasonable_correlation_window() {
-        let config = Config {
-            correlation_window_ms: 5,
-            ..Config::default()
-        };
-        assert!(config.validate().is_err());
+    fn validates_correlation_window_range() {
+        for correlation_window_ms in [5, 100] {
+            let config = Config {
+                correlation_window_ms,
+                ..Config::default()
+            };
+            assert!(config.validate().is_ok());
+        }
+
+        for correlation_window_ms in [4, 101] {
+            let config = Config {
+                correlation_window_ms,
+                ..Config::default()
+            };
+            assert!(config.validate().is_err());
+        }
     }
 
     #[test]

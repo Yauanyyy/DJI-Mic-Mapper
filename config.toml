@@ -9,8 +9,8 @@ volume_up_mode = "best_effort"
 # Logging: off / error / warn / info / debug / trace
 log_level = "error"
 
-# Correlation window for best_effort mode (ms)
-correlation_window_ms = 50
+# Correlation window for best_effort mode (5-100 ms)
+correlation_window_ms = 10
 
 # DJI Mic Mini HID settings
 usage_page = 0x000C

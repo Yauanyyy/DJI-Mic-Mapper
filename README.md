@@ -44,7 +44,7 @@ Most users only need `target` and `volume_up_mode`. The repository includes a re
 target = "Ctrl+Shift+Home"
 volume_up_mode = "best_effort"
 log_level = "error"
-correlation_window_ms = 50
+correlation_window_ms = 10
 ~~~
 
 Configuration options:
@@ -55,7 +55,7 @@ Configuration options:
 | `volume_up_mode` | How the receiver's `Volume Up` input is handled | `best_effort` |
 | `suppress_volume_up` | Legacy compatibility option; use `volume_up_mode` instead | Not set |
 | `log_level` | Logging level: `off`, `error`, `warn`, `info`, `debug`, or `trace` | `info` |
-| `correlation_window_ms` | Time window used by `best_effort`, from 20 to 500 ms | `100` |
+| `correlation_window_ms` | Time window used by `best_effort`, from 5 to 100 ms | `10` |
 | `usage_page` | HID top-level collection Usage Page; normally only needed for advanced matching | `0x000C` |
 | `usage` | HID top-level collection Usage; normally only needed for advanced matching | `0x0001` |
 | `button_usage` | DJI button Usage; normally only needed for advanced matching | `0x00E9` |

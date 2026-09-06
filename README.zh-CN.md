@@ -44,7 +44,7 @@ DJI Mic Mapper 是一个轻量的 Windows 工具，可以将 DJI Mic Mini 接收
 target = "Ctrl+Shift+Home"
 volume_up_mode = "best_effort"
 log_level = "error"
-correlation_window_ms = 50
+correlation_window_ms = 10
 ~~~
 
 配置项说明：
@@ -55,7 +55,7 @@ correlation_window_ms = 50
 | `volume_up_mode` | 如何处理接收器产生的 `Volume Up` 输入 | `best_effort` |
 | `suppress_volume_up` | 旧版兼容配置；建议改用 `volume_up_mode` | 未设置 |
 | `log_level` | 日志级别：`off`、`error`、`warn`、`info`、`debug` 或 `trace` | `info` |
-| `correlation_window_ms` | `best_effort` 使用的时间窗口，范围为 20–500ms | `100` |
+| `correlation_window_ms` | `best_effort` 使用的时间窗口，范围为 5–100ms | `10` |
 | `usage_page` | HID 顶层集合 Usage Page，通常仅在高级匹配时需要修改 | `0x000C` |
 | `usage` | HID 顶层集合 Usage，通常仅在高级匹配时需要修改 | `0x0001` |
 | `button_usage` | DJI 按键 Usage，通常仅在高级匹配时需要修改 | `0x00E9` |
