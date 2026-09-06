@@ -1,57 +1,18 @@
-# DJI Mic Mapper configuration
-#
-# This file is loaded from the same directory as "DJI Mic Mapper.exe".
-# After editing, choose "Reload config" from the tray menu; a successful
-# reload will show the active mapping and the loaded file path.
-#
-# ============================================================================
-# Key mapping
-# ============================================================================
-# `target` accepts a single key or a chord, for example:
-#   F13
-#   RightAlt
-#   Ctrl+Alt+]
-#
-# Key names are case-insensitive. Spaces, hyphens, and underscores in named
-# keys are ignored, so `Volume_Up`, `Volume-Up`, and `volumeup` are equivalent.
-# The `+` character separates chord parts. To map the plus key itself, use
-# `PLUS`, `EQUAL`, or `OEM_PLUS` instead of a literal `+`.
-#
-# Supported key groups include A-Z, 0-9, F1-F24, modifiers, navigation and
-# editing keys, numpad keys, media keys, and OEM punctuation keys. The complete
-# lookup table is in README.md under "按键映射查询表".
-target = "Ctrl+Alt+]"
+# DJI Mic Mapper
 
-# ============================================================================
-# Volume Up handling
-# ============================================================================
-# `off`: do not intercept Volume Up.
-# `best_effort`: correlate Volume Up with DJI Raw Input and replay unrelated
-#                Volume Up input after the correlation window.
-# `block_all`: WARNING - block every Volume Up input from every device.
+# Key triggered by the Mic button
+target = "Ctrl+Shift+Home"
+
+# Volume Up handling: off / best_effort / block_all
 volume_up_mode = "best_effort"
 
-# Legacy compatibility option. Use `volume_up_mode` for new configurations.
-# Do not set both options at the same time.
-# suppress_volume_up = true
+# Logging: off / error / warn / info / debug / trace
+log_level = "error"
 
-# ============================================================================
-# Logging
-# ============================================================================
-# Available levels, from least to most verbose:
-# `off`, `error`, `warn`, `info`, `debug`, `trace`.
-# `trace` records detailed Raw Input diagnostics and is useful while debugging.
-log_level = "info"
-
-# Only used by `best_effort`; valid range is 20-500 milliseconds.
+# Correlation window for best_effort mode (ms)
 correlation_window_ms = 50
 
-# ============================================================================
-# DJI receiver HID matching
-# ============================================================================
-# Defaults observed from DJI Mic Mini receiver VID 0x2CA3 / PID 0x4011.
-# These values can be overridden for a different firmware revision.
-# `report_id = 0` disables the report-ID pre-filter.
+# DJI Mic Mini HID settings
 usage_page = 0x000C
 usage = 0x0001
 button_usage = 0x00E9
