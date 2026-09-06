@@ -3,6 +3,9 @@
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/Yauanyyy/DJI-Mic-Mapper/actions/workflows/ci.yml/badge.svg)](https://github.com/Yauanyyy/DJI-Mic-Mapper/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Yauanyyy/DJI-Mic-Mapper)](https://github.com/Yauanyyy/DJI-Mic-Mapper/releases/latest)
+[![Language: Rust](https://img.shields.io/badge/language-Rust-black?logo=rust)](https://www.rust-lang.org/)
+[![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-0078D4?logo=windows11)](https://www.microsoft.com/windows/windows-11)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 DJI Mic Mapper is a lightweight Windows utility that lets you use the button on a DJI Mic Mini receiver as a configurable keyboard key or shortcut.
